@@ -42,7 +42,7 @@
                             Tak! Alle tallene i <strong>@(_game.Number)-tabellen</strong> er på plads, og Axolotl er glad igen! 🎉
                         </p>
                         <p class="win-stats">
-                            ⏱ @FormatTime(_stopwatch.Elapsed) · @MistakesText
+                            ⏱ @FormatTime(_stopwatch.Elapsed) · @MistakesText@(_hints > 0 ? $" · {_hints} hjælp" : "")
                             @if (_newRecord)
                             {
                                 <span class="record">Ny rekord!</span>
@@ -63,7 +63,11 @@
             <section class="table-panel" aria-label="@($"{_game.Number}-tabellen")">
                 <div class="table-head">
                     <h2>@(_game.Number)-tabellen</h2>
-                    <span class="chip timer @(_stopwatch.IsRunning ? "running" : "")" aria-label="Tid">⏱ @FormatTime(_stopwatch.Elapsed)</span>
+                    <div class="head-right">
+                        <button class="hint-btn" @onclick="ShowHint" disabled="@_game.IsWon"
+                                aria-label="Vis det næste tal" title="Vis det næste tal">?</button>
+                        <span class="chip timer @(_stopwatch.IsRunning ? "running" : "")" aria-label="Tid">⏱ @FormatTime(_stopwatch.Elapsed)</span>
+                    </div>
                 </div>
                 <ol class="slots">
                     @for (var k = 1; k <= _game.Max; k++)
@@ -96,7 +100,7 @@
             {
                 var t = tile;
                 <button @key="(_round, t.Id)"
-                        class="tile c@(t.Id % 6) @(t.Placed ? "placed" : "") @(_wrongId == t.Id ? (_wrongFlip ? "wrong-a" : "wrong-b") : "")"
+                        class="tile c@(t.Id % 6) @(t.Placed ? "placed" : "") @(_wrongId == t.Id ? (_wrongFlip ? "wrong-a" : "wrong-b") : "") @(_hintId == t.Id ? "hint" : "")"
                         style="--d: @(t.Id * 25)ms"
                         disabled="@(t.Placed || _game.IsWon)"
                         aria-label="@t.Value"
@@ -120,6 +124,8 @@
     private int _round;
     private int _stars;
     private int? _wrongId;
+    private int? _hintId;
+    private int _hints;
     private bool _wrongFlip;
     private bool _newRecord;
     private bool _playSad;
@@ -169,6 +175,8 @@
         _game.NewGame(level);
         _stopwatch.Reset();
         _wrongId = null;
+        _hintId = null;
+        _hints = 0;
         _newRecord = false;
         _playSad = true;
         _round++;
@@ -207,6 +215,7 @@
         }
 
         _wrongId = null;
+        _hintId = null;
         if (!_game.IsWon)
         {
             await Play("pling", _game.Placed);
@@ -217,6 +226,24 @@
         _stars++;
         await CheckRecord();
         await Play("success");
+    }
+
+    /// <summary>
+    /// Lights up the next number on the floor until it is picked. It starts the clock like a tap does,
+    /// and the hints used are shown with the time at the end.
+    /// </summary>
+    private void ShowHint()
+    {
+        if (_game.IsWon)
+            return;
+
+        if (!_stopwatch.IsRunning)
+            _stopwatch.Start();
+
+        var next = _game.Tiles.First(t => !t.Placed && t.Value == _game.NextValue);
+        if (_hintId != next.Id)
+            _hints++;
+        _hintId = next.Id;
     }
 
     /// <summary>The best time is kept per level, in this browser only.</summary>
