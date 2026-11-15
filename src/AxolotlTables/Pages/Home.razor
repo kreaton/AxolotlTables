@@ -1,0 +1,270 @@
+@page "/"
+@using System.Diagnostics
+@implements IDisposable
+@inject IJSRuntime JS
+
+<PageTitle>Axolotl-tabeller</PageTitle>
+
+<main class="axo-page">
+    <header class="title">
+        <h1 tabindex="-1">Axolotl-tabeller</h1>
+        <div class="title-buttons">
+            <button class="chip sound-btn" @onclick="ToggleSound"
+                    aria-label="@(_soundOn ? "Slå lyden fra" : "Slå lyden til")">
+                @(_soundOn ? "🔊" : "🔇")
+            </button>
+            <div class="chip stars" aria-label="@_stars stjerner">⭐ @_stars</div>
+            <a class="kg-home" href="../" aria-label="Alle spil" title="Alle spil"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h4.5v-6h4v6h4.5V9.5" /></svg><span class="kg-text">Alle spil</span></a>
+        </div>
+    </header>
+
+    <div class="play">
+        <div class="side">
+            <section class="story @(_game.IsWon ? "happy" : "sad")">
+                @* Both pictures are always there, so the happy one is loaded and ready when it is needed. *@
+                @* Tapping the axolotl plays its sound again: sad while it cries, the fanfare once it is happy. *@
+                <button class="axolotl" @key="_game.IsWon" @onclick="AxolotlTapped"
+                        aria-label="@(_game.IsWon ? "Axolotl er glad" : "Axolotl er ked af det")">
+                    <img class="sad-img" src="images/axolotl-sad.webp" alt="" />
+                    <img class="happy-img" src="images/axolotl-happy.webp" alt="" />
+                    @if (_game.IsWon)
+                    {
+                        <span class="heart ha" aria-hidden="true">💖</span>
+                        <span class="heart hb" aria-hidden="true">💕</span>
+                        <span class="heart hc" aria-hidden="true">✨</span>
+                    }
+                </button>
+
+                <div class="bubble" aria-live="polite">
+                    @if (_game.IsWon)
+                    {
+                        <p class="win-text">
+                            Tak! Alle tallene i <strong>@(_game.Number)-tabellen</strong> er på plads, og Axolotl er glad igen! 🎉
+                        </p>
+                        <p class="win-stats">
+                            ⏱ @FormatTime(_stopwatch.Elapsed) · @MistakesText
+                            @if (_newRecord)
+                            {
+                                <span class="record">Ny rekord!</span>
+                            }
+                        </p>
+                        <button class="big-btn next-btn" @onclick="() => NewGame(_game.Level)">Ny tabel ➜</button>
+                    }
+                    else
+                    {
+                        <p>
+                            Hjælp! Axolotl er ked af det, for tallene i <strong>@(_game.Number)-tabellen</strong> er faldet på gulvet.
+                            Sæt tallene på plads i rækkefølge – så hurtigt som muligt – så Axolotl bliver glad igen.
+                        </p>
+                    }
+                </div>
+            </section>
+
+            <section class="table-panel" aria-label="@($"{_game.Number}-tabellen")">
+                <div class="table-head">
+                    <h2>@(_game.Number)-tabellen</h2>
+                    <span class="chip timer @(_stopwatch.IsRunning ? "running" : "")" aria-label="Tid">⏱ @FormatTime(_stopwatch.Elapsed)</span>
+                </div>
+                <ol class="slots">
+                    @for (var k = 1; k <= _game.Max; k++)
+                    {
+                        var filled = k <= _game.Placed;
+                        var next = k == _game.Placed + 1;
+                        <li class="slot-wrap">
+                            <span class="slot @(filled ? "filled" : next ? "next" : "")" @key="(k, filled)">
+                                @(filled ? k * _game.Number : next ? "?" : "")
+                            </span>
+                            <span class="slot-label">@k · @_game.Number</span>
+                        </li>
+                    }
+                </ol>
+                <div class="level-row">
+                    <div class="levels" role="group" aria-label="Niveau">
+                        <button class="level @(_game.Level == 1 ? "on" : "")" @onclick="() => NewGame(1)" aria-pressed="@(_game.Level == 1)">1–5</button>
+                        <button class="level @(_game.Level == 2 ? "on" : "")" @onclick="() => NewGame(2)" aria-pressed="@(_game.Level == 2)">1–10</button>
+                    </div>
+                    @if (!_game.IsWon)
+                    {
+                        <button class="chip new-btn" @onclick="() => NewGame(_game.Level)">🔄 Ny tabel</button>
+                    }
+                </div>
+            </section>
+        </div>
+
+        <section class="floor @(_game.IsWon ? "won" : "")" aria-label="Tallene på gulvet">
+            @foreach (var tile in _game.Tiles)
+            {
+                var t = tile;
+                <button @key="(_round, t.Id)"
+                        class="tile c@(t.Id % 6) @(t.Placed ? "placed" : "") @(_wrongId == t.Id ? (_wrongFlip ? "wrong-a" : "wrong-b") : "")"
+                        style="--d: @(t.Id * 25)ms"
+                        disabled="@(t.Placed || _game.IsWon)"
+                        aria-label="@t.Value"
+                        @onclick="() => Pick(t)">
+                    @t.Value
+                </button>
+            }
+        </section>
+    </div>
+
+    <footer class="credits">Lavet med kærlighed 💛 (c) 2026 Per Hejndorf, Kreaton – @BuildInfo.Display</footer>
+</main>
+
+@code {
+    private const string LevelKey = "axolotltables-level";
+    private const string BestKey = "axolotltables-best-";
+
+    private readonly TableGame _game = new();
+    private readonly Stopwatch _stopwatch = new();
+    private readonly CancellationTokenSource _disposed = new();
+    private int _round;
+    private int _stars;
+    private int? _wrongId;
+    private bool _wrongFlip;
+    private bool _newRecord;
+    private bool _playSad;
+    private bool _soundOn = true;
+
+    private string MistakesText => _game.Mistakes switch
+    {
+        0 => "ingen fejl",
+        1 => "1 fejl",
+        var n => $"{n} fejl",
+    };
+
+    protected override void OnInitialized()
+    {
+        StartRound(1);
+        _ = TickAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The level chosen last time; the first table is on level 1 until it has been read.
+        if (firstRender && await Load(LevelKey) == "2")
+        {
+            StartRound(2);
+            StateHasChanged();
+            return;
+        }
+
+        // A new table has fallen on the floor and the axolotl cries: play the sad fanfare once it shows.
+        if (_playSad)
+        {
+            _playSad = false;
+            await Play("sad");
+        }
+    }
+
+    private Task AxolotlTapped() => Play(_game.IsWon ? "success" : "sad");
+
+    private void NewGame(int level)
+    {
+        StartRound(level);
+        _ = Save(LevelKey, level.ToString());
+    }
+
+    private void StartRound(int level)
+    {
+        _game.NewGame(level);
+        _stopwatch.Reset();
+        _wrongId = null;
+        _newRecord = false;
+        _playSad = true;
+        _round++;
+    }
+
+    private async Task TickAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_disposed.Token))
+            {
+                if (_stopwatch.IsRunning)
+                    StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task Pick(Tile tile)
+    {
+        if (_game.IsWon || tile.Placed)
+            return;
+
+        // The clock starts with the first tap, so reading the story is free.
+        if (!_stopwatch.IsRunning)
+            _stopwatch.Start();
+
+        if (!_game.Pick(tile))
+        {
+            // Flip between two identical animations, so tapping the same wrong tile again shakes it again.
+            _wrongFlip = _wrongId != tile.Id || !_wrongFlip;
+            _wrongId = tile.Id;
+            await Play("tryAgain");
+            return;
+        }
+
+        _wrongId = null;
+        if (!_game.IsWon)
+        {
+            await Play("pling", _game.Placed);
+            return;
+        }
+
+        _stopwatch.Stop();
+        _stars++;
+        await CheckRecord();
+        await Play("success");
+    }
+
+    /// <summary>The best time is kept per level, in this browser only.</summary>
+    private async Task CheckRecord()
+    {
+        var key = BestKey + _game.Level;
+        var ms = (long)_stopwatch.Elapsed.TotalMilliseconds;
+        var best = long.TryParse(await Load(key), out var b) ? b : (long?)null;
+        if (best is null || ms < best)
+        {
+            _newRecord = best is not null;
+            await Save(key, ms.ToString());
+        }
+    }
+
+    private static string FormatTime(TimeSpan t) => $"{(int)t.TotalMinutes}:{t.Seconds:00}";
+
+    private void ToggleSound() => _soundOn = !_soundOn;
+
+    private async Task Play(string sound, params object[] args)
+    {
+        if (!_soundOn) return;
+        try
+        {
+            await JS.InvokeVoidAsync($"gameSounds.{sound}", args);
+        }
+        catch (JSException)
+        {
+            // No audio support: the game still works without sound.
+        }
+    }
+
+    // localStorage can be missing or blocked (private mode); the game then just forgets.
+    private async Task<string?> Load(string key)
+    {
+        try { return await JS.InvokeAsync<string?>("localStorage.getItem", key); }
+        catch (JSException) { return null; }
+    }
+
+    private async Task Save(string key, string value)
+    {
+        try { await JS.InvokeVoidAsync("localStorage.setItem", key, value); }
+        catch (JSException) { }
+    }
+
+    public void Dispose()
+    {
+        _disposed.Cancel();
+        _disposed.Dispose();
+    }
+}
